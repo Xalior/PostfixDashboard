@@ -9,7 +9,13 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    paths-ignore: ['**.md', '.env.example', 'docs/**']
   workflow_dispatch:
+
+# A newer push supersedes an in-flight build (the emulated arm64 leg is slow).
+concurrency:
+  group: ghcr-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
