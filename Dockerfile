@@ -36,6 +36,9 @@ RUN npm run build
 # the lean runner image and runs with plain `node` (no tsx/source/devdeps).
 RUN npm run build:cli
 
+# Generate the schema SQL so `cli init` can create the schema on a virgin DB.
+RUN npm run db:generate
+
 # ---------------------------------------------------------------------------
 # 3) runner — lean runtime image using Next's standalone output
 # ---------------------------------------------------------------------------
@@ -62,6 +65,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Embedded management CLI — `docker exec <container> pfd-cli <module> <task> ...`
 COPY --from=builder --chown=nextjs:nodejs /app/dist/cli.cjs ./cli.cjs
+# Schema SQL for `cli init` (virgin-DB bootstrap)
+COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
 
 USER nextjs
 EXPOSE 3000

@@ -9,10 +9,13 @@
  * Config defaults are read from the same env vars as lib/env.ts (without
  * importing it, since that module is server-only).
  */
-import { and, count, eq } from 'drizzle-orm';
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { and, count, eq, sql } from 'drizzle-orm';
 import type { MySql2Database } from 'drizzle-orm/mysql2';
 
-import { alias, domain, mailbox } from '@/lib/db/schema';
+import { admin, alias, config, domain, domainAdmins, mailbox } from '@/lib/db/schema';
 import { hashWithScheme } from '@/lib/auth/crypt';
 import { buildMaildir, DEFAULT_MAILDIR_TEMPLATE } from '@/lib/mailbox-path';
 import { mbToBytes } from '@/lib/format';
@@ -227,4 +230,178 @@ export async function deleteMailbox(db: Db, address: string) {
   await getMailbox(db, username); // throws if missing
   await db.delete(alias).where(and(eq(alias.address, username), eq(alias.goto, username)));
   await db.delete(mailbox).where(eq(mailbox.username, username));
+}
+
+// ---------------------------------------------------------------------------
+// admin  (mirrors lib/actions/admin.ts behaviour, sans web auth)
+// ---------------------------------------------------------------------------
+
+const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export interface AdminInput {
+  password?: string;
+  superadmin?: boolean;
+  active?: boolean;
+  domains?: string[];
+}
+
+/** Number of active superadmins — to avoid locking everyone out. */
+async function countActiveSuperadmins(db: Db): Promise<number> {
+  const rows = await db
+    .select({ u: admin.username })
+    .from(admin)
+    .where(and(eq(admin.superadmin, 1), eq(admin.active, 1)));
+  return rows.length;
+}
+
+/** Replace an admin's domain_admins rows (domain='ALL' for superadmins). */
+async function syncAdminDomains(db: Db, username: string, domains: string[], superadmin: boolean) {
+  await db.delete(domainAdmins).where(eq(domainAdmins.username, username));
+  if (superadmin) {
+    await db.insert(domainAdmins).values({ username, domain: 'ALL', active: 1, created: new Date() });
+    return;
+  }
+  if (domains.length > 0) {
+    await db.insert(domainAdmins).values(
+      domains.map((d) => ({ username, domain: d.toLowerCase(), active: 1, created: new Date() })),
+    );
+  }
+}
+
+export async function listAdmins(db: Db) {
+  return db.select().from(admin);
+}
+
+export async function getAdmin(db: Db, username: string) {
+  const u = username.trim().toLowerCase();
+  const [row] = await db.select().from(admin).where(eq(admin.username, u)).limit(1);
+  if (!row) throw new OpError(`Admin ${u} not found.`);
+  return row;
+}
+
+export async function createAdmin(db: Db, username: string, opts: AdminInput) {
+  const u = username.trim().toLowerCase();
+  if (!emailRe.test(u)) throw new OpError(`"${username}" is not a valid email address.`);
+  if (!opts.password || opts.password.length < 8) {
+    throw new OpError('A password of at least 8 characters is required (--password).');
+  }
+  const [existing] = await db.select({ u: admin.username }).from(admin).where(eq(admin.username, u)).limit(1);
+  if (existing) throw new OpError(`Admin ${u} already exists.`);
+
+  const now = new Date();
+  const superadmin = !!opts.superadmin;
+  await db.insert(admin).values({
+    username: u,
+    password: await hashWithScheme(opts.password, defaults.passwordScheme, defaults.bcryptRounds),
+    superadmin: superadmin ? 1 : 0,
+    active: opts.active === undefined ? 1 : opts.active ? 1 : 0,
+    created: now,
+    modified: now,
+  });
+  await syncAdminDomains(db, u, opts.domains ?? [], superadmin);
+  return getAdmin(db, u);
+}
+
+export async function updateAdmin(db: Db, username: string, opts: AdminInput) {
+  const u = username.trim().toLowerCase();
+  const target = await getAdmin(db, u);
+  const newSuper = opts.superadmin === undefined ? target.superadmin === 1 : opts.superadmin;
+  const newActive = opts.active === undefined ? target.active === 1 : opts.active;
+
+  const wasActiveSuper = target.superadmin === 1 && target.active === 1;
+  if (wasActiveSuper && (!newSuper || !newActive) && (await countActiveSuperadmins(db)) <= 1) {
+    throw new OpError('Cannot remove the last superadmin — promote another admin first.');
+  }
+
+  const set: Record<string, unknown> = {
+    superadmin: newSuper ? 1 : 0,
+    active: newActive ? 1 : 0,
+    modified: new Date(),
+  };
+  if (opts.password !== undefined) {
+    if (opts.password.length < 8) throw new OpError('Password must be at least 8 characters.');
+    set.password = await hashWithScheme(opts.password, defaults.passwordScheme, defaults.bcryptRounds);
+  }
+  await db.update(admin).set(set).where(eq(admin.username, u));
+  if (opts.domains !== undefined || opts.superadmin !== undefined) {
+    await syncAdminDomains(db, u, opts.domains ?? [], newSuper);
+  }
+  return getAdmin(db, u);
+}
+
+export async function deleteAdmin(db: Db, username: string) {
+  const u = username.trim().toLowerCase();
+  const target = await getAdmin(db, u);
+  if (target.superadmin === 1 && target.active === 1 && (await countActiveSuperadmins(db)) <= 1) {
+    throw new OpError('Cannot delete the last superadmin.');
+  }
+  await db.delete(domainAdmins).where(eq(domainAdmins.username, u));
+  await db.delete(admin).where(eq(admin.username, u));
+}
+
+// ---------------------------------------------------------------------------
+// bootstrap — make BOTH a virgin (fresh) DB and a legacy (existing
+// postfixadmin) DB first-class. `init` creates the schema only if absent;
+// `seed` creates the first superadmin only if there are none. Both are safe,
+// idempotent no-ops against a DB that already has schema / admins.
+// ---------------------------------------------------------------------------
+
+/** True if the core schema (the `admin` table) is present. */
+export async function schemaExists(db: Db): Promise<boolean> {
+  try {
+    await db.select({ u: admin.username }).from(admin).limit(1);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create the schema from the drizzle-generated SQL if it isn't there yet.
+ * Returns 'exists' (legacy DB — nothing done) or 'created' (virgin DB).
+ */
+export async function initSchema(db: Db, sqlDir: string): Promise<'exists' | 'created'> {
+  if (await schemaExists(db)) return 'exists';
+  const files = (await readdir(sqlDir)).filter((f) => f.endsWith('.sql')).sort();
+  if (files.length === 0) throw new OpError(`No migration SQL found in ${sqlDir}`);
+  for (const f of files) {
+    const text = await readFile(join(sqlDir, f), 'utf8');
+    for (const stmt of text.split('--> statement-breakpoint')) {
+      const s = stmt.trim();
+      if (s) await db.execute(sql.raw(s));
+    }
+  }
+  return 'created';
+}
+
+/**
+ * Old `db:seed`: ensure a config version row and create the first superadmin
+ * if (and only if) there are no admins yet. No-op on a populated DB.
+ */
+export async function seedSuperadmin(
+  db: Db,
+  username: string,
+  password: string,
+): Promise<'exists' | 'created'> {
+  const u = username.trim().toLowerCase();
+  if (!emailRe.test(u)) throw new OpError(`"${username}" is not a valid email address.`);
+  if (!password || password.length < 8) throw new OpError('Seed password must be at least 8 characters.');
+
+  const [existingCfg] = await db.select().from(config).where(eq(config.name, 'version')).limit(1);
+  if (!existingCfg) await db.insert(config).values({ name: 'version', value: '3000' });
+
+  const [{ n }] = await db.select({ n: count() }).from(admin);
+  if (Number(n) > 0) return 'exists';
+
+  const now = new Date();
+  await db.insert(admin).values({
+    username: u,
+    password: await hashWithScheme(password, defaults.passwordScheme, defaults.bcryptRounds),
+    superadmin: 1,
+    active: 1,
+    created: now,
+    modified: now,
+  });
+  await db.insert(domainAdmins).values({ username: u, domain: 'ALL', active: 1, created: now });
+  return 'created';
 }

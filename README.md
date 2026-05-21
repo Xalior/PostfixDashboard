@@ -45,7 +45,7 @@ configured via environment variables and ships in a single container.
 | Change-own-password              | ✅                  |
 | Vacation / autoreply             | ✅                  |
 | Quota tracking (reads quota2)    | ✅                  |
-| Headless CLI (`postfixadmin-cli`)| ✅ domain + mailbox |
+| Headless CLI (`postfixadmin-cli`)| ✅ domain + mailbox + admin |
 | Fetchmail                        | 🚧 schema only      |
 | DKIM key management              | 🚧 schema only      |
 | TOTP / MFA                       | ❌ planned          |
@@ -57,32 +57,40 @@ configured via environment variables and ships in a single container.
 - Docker + Docker Compose (the easy path), or
 - Node.js 22+ and a MySQL 8 instance you control (local dev)
 
-## Quick start with Docker
+## Quick start (Docker)
 
-```bash
-cp .env.example .env
-# Edit .env — at minimum set SESSION_SECRET (openssl rand -base64 48)
+One published image (multi-arch, amd64 + arm64) does everything — web UI **and** management/
+bootstrap CLI. No separate tools image, no repo clone.
 
-docker compose up -d db
-docker compose run --rm tools npm run db:push      # apply schema
-docker compose run --rm tools npm run db:seed      # create first superadmin
-docker compose up -d app
+```yaml
+# compose.yml
+services:
+  postfixdashboard:
+    image: ghcr.io/xalior/postfixdashboard:latest
+    restart: unless-stopped
+    ports: ['3000:3000']
+    environment:
+      DATABASE_URL: mysql://postfix:secret@your-db-host:3306/postfix
+      SESSION_SECRET: 'change-me — openssl rand -base64 48 (>= 32 chars)'
 ```
 
-Open http://localhost:3000 and sign in with the seeded superadmin
-(defaults: `admin@example.com` / `ChangeMe123!` — override via
-`SEED_SUPERADMIN_USERNAME` / `SEED_SUPERADMIN_PASSWORD` in `.env`).
-
-### Prebuilt image
-
-Multi-arch images (amd64 + arm64) are published to GitHub Container Registry by CI:
-
 ```bash
-docker pull ghcr.io/xalior/postfixdashboard:latest
+docker compose up -d
 ```
 
-The CLI is baked into this image (see below), so the same container serves the web UI and
-headless management — no separate tools image needed at runtime.
+Both DB types are **first-class**, and bootstrap runs from the same container (both commands are
+idempotent — safe to re-run, and safe no-ops against a DB that's already set up):
+
+```bash
+# Virgin (fresh) DB — create schema, then the first superadmin:
+docker compose exec postfixdashboard cli init
+docker compose exec postfixdashboard cli seed me@example.com --password '…'
+
+# Legacy DB (existing postfixadmin) — schema + admins already exist; nothing to do.
+```
+
+Then open http://localhost:3000 and sign in. (`cli seed` falls back to
+`SEED_SUPERADMIN_USERNAME`/`SEED_SUPERADMIN_PASSWORD` if you don't pass args.)
 
 ## Local development
 
@@ -115,11 +123,12 @@ is **bundled into the application image**, so you run it against the running con
 `docker exec` (it inherits the container's `DATABASE_URL`, so no extra config):
 
 ```bash
-docker exec <container> cli domain view
+docker exec <container> cli init                              # create schema (virgin DB; no-op if present)
+docker exec <container> cli seed --password 's3cret...'       # first superadmin (no-op if any exist)
+docker exec <container> cli admin add me@example.com --superadmin 1 --password '...'
 docker exec <container> cli domain add example.com --mailboxes 20 --active 1
 docker exec <container> cli mailbox add jo@example.com --password 's3cret...' --name "Jo" --quota 200
 docker exec <container> cli mailbox view example.com          # or: mailbox view jo@example.com
-docker exec <container> cli mailbox update jo@example.com --quota 500
 docker exec <container> cli domain delete example.com         # cascades mailboxes + aliases
 ```
 
@@ -127,17 +136,21 @@ docker exec <container> cli domain delete example.com         # cascades mailbox
 `npm run cli -- <module> <task> …`.
 
 ```
-Modules: domain, mailbox      Tasks: view  add  update  delete
+Modules: domain, mailbox, admin     Tasks: view  add  update  delete
+Bootstrap:  init   (create schema, virgin DB)      seed [<user>] [--password X]  (first superadmin)
 
   domain  view [<domain>] | add <domain> [--description x] [--aliases n] [--mailboxes n]
                             [--maxquota MB] [--quota MB] [--transport x] [--backupmx 0|1] [--active 0|1]
   mailbox view [<addr>]   | add <addr> --password X [--password2 X] [--name "…"] [--quota MB] [--active 0|1]
           ( view with no identifier lists; `mailbox view --domain example.com` filters by domain )
+  admin   view [<email>]  | add <email> --password X [--superadmin 0|1] [--active 0|1] [--domains "a,b"]
 ```
 
-The CLI shares its logic with the web UI (`lib/cli/ops.ts`), so it writes identically: relative
-maildir, `{BLF-CRYPT}` passwords, the mailbox self-alias, and the same validation/limit/quota
-checks. `admin`, `alias`, and `aliasdomain` modules are planned follow-ups.
+`init` and `seed` are **idempotent** — they create the schema / first superadmin only when absent,
+so they're safe no-ops against a legacy (existing postfixadmin) DB. The CLI shares its logic with
+the web UI (`lib/cli/ops.ts`), so it writes identically: relative maildir, `{BLF-CRYPT}` passwords,
+the mailbox self-alias, last-superadmin protection, and the same validation/limit/quota checks.
+`alias` and `aliasdomain` modules are planned follow-ups.
 
 ## Configuration
 

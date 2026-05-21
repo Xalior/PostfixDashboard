@@ -37,8 +37,8 @@ pnpm-debug.log*
 .idea/
 *.swp
 
-# Drizzle generated
-drizzle/meta/
+# Drizzle generated (schema SQL is produced at build time by `db:generate`)
+drizzle/
 docs/discovery
 docs/plans
 
