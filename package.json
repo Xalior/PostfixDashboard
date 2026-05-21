@@ -10,6 +10,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test lib/auth/crypt.test.ts lib/mailbox-path.test.ts",
+    "cli": "tsx scripts/cli.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
