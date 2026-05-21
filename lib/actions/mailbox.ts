@@ -12,6 +12,7 @@ import { db } from '@/lib/db';
 import { alias, domain, mailbox } from '@/lib/db/schema';
 import { env } from '@/lib/env';
 import { mbToBytes } from '@/lib/format';
+import { buildMaildir } from '@/lib/mailbox-path';
 
 const emailSchema = z.string().trim().toLowerCase().email();
 
@@ -42,16 +43,6 @@ async function requireAdminForDomain(domainName: string) {
     throw new Error('Not authorised for this domain');
   }
   return user;
-}
-
-function buildMaildir(localpart: string, domainName: string) {
-  const template = env.mailbox.maildirTemplate;
-  return (
-    template
-      .replace(/\{domain\}/g, domainName)
-      .replace(/\{user\}/g, `${localpart}@${domainName}`)
-      .replace(/\{local\}/g, localpart) || `/virtual/${domainName}/${localpart}@${domainName}/`
-  );
 }
 
 export async function createMailboxAction(
@@ -104,7 +95,7 @@ export async function createMailboxAction(
   if (existing) return { error: `Mailbox ${username} already exists.` };
 
   const now = new Date();
-  const maildir = buildMaildir(v.localpart, v.domain);
+  const maildir = buildMaildir(v.localpart, v.domain, env.mailbox.maildirTemplate);
   const passwordHash = await hashPassword(v.password);
 
   await db.insert(mailbox).values({

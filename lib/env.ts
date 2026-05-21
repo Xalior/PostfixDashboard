@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { DEFAULT_MAILDIR_TEMPLATE } from '@/lib/mailbox-path';
+
 /**
  * Centralised env-var access. Throws loudly at startup if something critical
  * is missing — the whole point of this project is to make configuration
@@ -64,7 +66,7 @@ export const env = {
   },
 
   mailbox: {
-    maildirTemplate: optional('MAILDIR_TEMPLATE', '/virtual/{domain}/{user}/'),
+    maildirTemplate: optional('MAILDIR_TEMPLATE', DEFAULT_MAILDIR_TEMPLATE),
     defaultQuotaMb: int('DEFAULT_MAILBOX_QUOTA_MB', 1024),
   },
 
