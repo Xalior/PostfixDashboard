@@ -32,6 +32,10 @@ ENV DB_NAME=placeholder
 
 RUN npm run build
 
+# Bundle the management CLI into a single self-contained file so it ships inside
+# the lean runner image and runs with plain `node` (no tsx/source/devdeps).
+RUN npm run build:cli
+
 # ---------------------------------------------------------------------------
 # 3) runner — lean runtime image using Next's standalone output
 # ---------------------------------------------------------------------------
@@ -45,13 +49,19 @@ ENV HOSTNAME=0.0.0.0
 
 RUN apk add --no-cache tini \
   && addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 nextjs
+  && adduser --system --uid 1001 nextjs \
+  && printf '#!/bin/sh\nexec node /app/cli.cjs "$@"\n' > /usr/local/bin/pfd-cli \
+  && chmod +x /usr/local/bin/pfd-cli \
+  && printf '#!/bin/sh\nexec pfd-cli "$@"\n' > /usr/local/bin/cli \
+  && chmod +x /usr/local/bin/cli
 
 # Next.js standalone output already contains only the minimal node_modules
 # needed to run the compiled server.
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Embedded management CLI — `docker exec <container> pfd-cli <module> <task> ...`
+COPY --from=builder --chown=nextjs:nodejs /app/dist/cli.cjs ./cli.cjs
 
 USER nextjs
 EXPOSE 3000
