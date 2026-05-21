@@ -1,0 +1,73 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: postfix-dashboard-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_NAME:-postfix}
+      MYSQL_USER: ${DB_USER:-postfix}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-postfix}
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=caching_sha2_password
+    volumes:
+      - db-data:/var/lib/mysql
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build:
+      context: .
+      target: runner
+    container_name: postfix-dashboard-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://${DB_USER:-postfix}:${DB_PASSWORD:-postfix}@db:3306/${DB_NAME:-postfix}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in your .env}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-postfix_dashboard_session}
+      SESSION_MAX_AGE: ${SESSION_MAX_AGE:-28800}
+      PASSWORD_SCHEME: ${PASSWORD_SCHEME:-BLF-CRYPT}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      MAILDIR_TEMPLATE: ${MAILDIR_TEMPLATE:-/virtual/{domain}/{user}/}
+      DEFAULT_MAILBOX_QUOTA_MB: ${DEFAULT_MAILBOX_QUOTA_MB:-1024}
+      DEFAULT_DOMAIN_MAILBOXES: ${DEFAULT_DOMAIN_MAILBOXES:-100}
+      DEFAULT_DOMAIN_ALIASES: ${DEFAULT_DOMAIN_ALIASES:-100}
+      DEFAULT_DOMAIN_QUOTA_MB: ${DEFAULT_DOMAIN_QUOTA_MB:-10240}
+      FEATURE_VACATION: ${FEATURE_VACATION:-true}
+      VACATION_DOMAIN: ${VACATION_DOMAIN:-autoreply.example.com}
+      BRAND_NAME: ${BRAND_NAME:-Postfix Dashboard}
+      DEFAULT_THEME: ${DEFAULT_THEME:-system}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+  # One-shot service: run schema push + seed. Invoke with:
+  #   docker compose run --rm tools npm run db:push
+  #   docker compose run --rm tools npm run db:seed
+  tools:
+    build:
+      context: .
+      target: tools
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://${DB_USER:-postfix}:${DB_PASSWORD:-postfix}@db:3306/${DB_NAME:-postfix}
+      SESSION_SECRET: ${SESSION_SECRET:-placeholder-not-used-for-cli-tasks}
+      PASSWORD_SCHEME: ${PASSWORD_SCHEME:-BLF-CRYPT}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      SEED_SUPERADMIN_USERNAME: ${SEED_SUPERADMIN_USERNAME:-admin@example.com}
+      SEED_SUPERADMIN_PASSWORD: ${SEED_SUPERADMIN_PASSWORD:-ChangeMe123!}
+
+volumes:
+  db-data:

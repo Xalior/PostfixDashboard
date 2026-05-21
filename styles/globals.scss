@@ -1,0 +1,137 @@
+// ---------------------------------------------------------------------------
+// Global stylesheet
+//
+// All colours / spacings come from Bootstrap 5 CSS custom properties so
+// future theming is a matter of overriding `--bs-*` variables (either on
+// `:root` for light mode or `[data-bs-theme="dark"]` for dark mode). Avoid
+// hard-coded hex values anywhere outside this file.
+// ---------------------------------------------------------------------------
+
+// Import Bootstrap 5 and Bootstrap Icons.
+@import 'bootstrap/scss/bootstrap';
+@import 'bootstrap-icons/font/bootstrap-icons.css';
+
+// ---------------------------------------------------------------------------
+// Layout chrome
+// ---------------------------------------------------------------------------
+
+html,
+body {
+  height: 100%;
+  background-color: var(--bs-body-bg);
+  color: var(--bs-body-color);
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+main.app-main {
+  flex: 1 0 auto;
+  padding-top: 1.5rem;
+  padding-bottom: 2rem;
+}
+
+.app-navbar {
+  background-color: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.app-footer {
+  flex-shrink: 0;
+  background-color: var(--bs-tertiary-bg);
+  border-top: 1px solid var(--bs-border-color);
+  padding: 1rem 0;
+  font-size: 0.875rem;
+  color: var(--bs-secondary-color);
+}
+
+// ---------------------------------------------------------------------------
+// Status pills — driven entirely by bootstrap theme colours
+// ---------------------------------------------------------------------------
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background-color: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
+  border: 1px solid var(--bs-border-color);
+
+  &.status-active {
+    background-color: var(--bs-success-bg-subtle);
+    color: var(--bs-success-text-emphasis);
+    border-color: var(--bs-success-border-subtle);
+  }
+  &.status-inactive {
+    background-color: var(--bs-danger-bg-subtle);
+    color: var(--bs-danger-text-emphasis);
+    border-color: var(--bs-danger-border-subtle);
+  }
+  &.status-warn {
+    background-color: var(--bs-warning-bg-subtle);
+    color: var(--bs-warning-text-emphasis);
+    border-color: var(--bs-warning-border-subtle);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quota bars
+// ---------------------------------------------------------------------------
+
+.quota-cell {
+  min-width: 180px;
+}
+.quota-bar {
+  height: 6px;
+  background-color: var(--bs-secondary-bg);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 2px;
+
+  > span {
+    display: block;
+    height: 100%;
+    background-color: var(--bs-primary);
+    transition: width 250ms ease-out;
+  }
+  &.over {
+    > span {
+      background-color: var(--bs-danger);
+    }
+  }
+  &.warn {
+    > span {
+      background-color: var(--bs-warning);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Forms helpers
+// ---------------------------------------------------------------------------
+
+.form-section + .form-section {
+  margin-top: 2rem;
+}
+.form-section h2 {
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bs-secondary-color);
+  margin-bottom: 0.75rem;
+}
+
+// ---------------------------------------------------------------------------
+// Prevent a flash of unstyled theme.
+// ---------------------------------------------------------------------------
+
+html:not([data-bs-theme]) body {
+  visibility: hidden;
+}
