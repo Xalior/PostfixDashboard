@@ -1,6 +1,6 @@
 'use server';
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -36,6 +36,15 @@ async function requireSuperadminAction() {
     throw new Error('Not authorised');
   }
   return user;
+}
+
+/** Number of active admins flagged superadmin — used to avoid lockout. */
+async function countActiveSuperadmins(): Promise<number> {
+  const rows = await db
+    .select({ u: admin.username })
+    .from(admin)
+    .where(and(eq(admin.superadmin, 1), eq(admin.active, 1)));
+  return rows.length;
 }
 
 function extractDomains(formData: FormData): string[] {
@@ -126,6 +135,15 @@ export async function updateAdminAction(
   }
   const v = parsed.data;
 
+  // Don't let the last active superadmin be demoted or deactivated (lockout).
+  const [target] = await db.select().from(admin).where(eq(admin.username, username)).limit(1);
+  if (!target) return { error: `Admin ${username} not found.` };
+  const wasActiveSuper = target.superadmin === 1 && target.active === 1;
+  const losingSuper = wasActiveSuper && (!v.superadmin || !v.active);
+  if (losingSuper && (await countActiveSuperadmins()) <= 1) {
+    return { error: 'Cannot remove the last superadmin — promote another admin first.' };
+  }
+
   const update: Partial<typeof admin.$inferInsert> = {
     superadmin: v.superadmin ? 1 : 0,
     active: v.active ? 1 : 0,
@@ -147,6 +165,10 @@ export async function deleteAdminAction(username: string, _formData?: FormData):
   const current = await requireSuperadminAction();
   if (current.username === username) {
     throw new Error('Cannot delete your own account.');
+  }
+  const [target] = await db.select().from(admin).where(eq(admin.username, username)).limit(1);
+  if (target?.superadmin === 1 && target.active === 1 && (await countActiveSuperadmins()) <= 1) {
+    throw new Error('Cannot delete the last superadmin.');
   }
   await db.delete(domainAdmins).where(eq(domainAdmins.username, username));
   await db.delete(admin).where(eq(admin.username, username));

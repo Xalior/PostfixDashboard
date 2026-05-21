@@ -63,16 +63,20 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     .limit(1);
   if (!row) return null;
 
-  const isSuperadmin = session.role === 'superadmin' || row.superadmin === 1;
+  // Authoritative super-status from the DB only — NOT the (possibly stale)
+  // session role — so demoting a superadmin takes effect on the next request,
+  // matching the immediacy of deactivation. Back-compat: an active
+  // domain='ALL' row also confers super (older phppostfixadmin installs).
+  const grantRows = await db
+    .select({ domain: domainAdmins.domain })
+    .from(domainAdmins)
+    .where(and(eq(domainAdmins.username, row.username), eq(domainAdmins.active, 1)));
+  const hasAllRow = grantRows.some((r) => r.domain === 'ALL');
+  const isSuperadmin = row.superadmin === 1 || hasAllRow;
 
-  let allowedDomains: string[] | null = null;
-  if (!isSuperadmin) {
-    const rows = await db
-      .select({ domain: domainAdmins.domain })
-      .from(domainAdmins)
-      .where(and(eq(domainAdmins.username, row.username), eq(domainAdmins.active, 1)));
-    allowedDomains = rows.map((r) => r.domain).filter((d) => d !== 'ALL');
-  }
+  const allowedDomains: string[] | null = isSuperadmin
+    ? null
+    : grantRows.map((r) => r.domain).filter((d) => d !== 'ALL');
 
   return {
     session,

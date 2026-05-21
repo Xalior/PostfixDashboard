@@ -10,6 +10,12 @@ import { admin, domainAdmins, mailbox } from '@/lib/db/schema';
 import { verifyPassword } from './password';
 import { createSession, destroySession, type SessionRole } from './session';
 
+// A real bcrypt hash used only to spend ~the same CPU verifying a password
+// when the account doesn't exist, so response time doesn't reveal whether a
+// username is valid (account-enumeration defence). Matches no real password.
+const DUMMY_PASSWORD_HASH =
+  '{BLF-CRYPT}$2a$12$5mu4/sfArvEMtiafmmZYMOMuqhqdEJcv77kLqPtpUMrFBAx5CwZdu';
+
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required').email('Must be an email'),
   password: z.string().min(1, 'Password is required'),
@@ -81,6 +87,13 @@ export async function loginAction(
     await createSession(mailboxRow.username, 'user');
     await audit(mailboxRow.username, mailboxRow.domain, 'login', 'user');
     redirect('/me');
+  }
+
+  // Neither table had this account: spend a comparable amount of CPU on a
+  // dummy verify so an unknown username isn't measurably faster than a known
+  // one with a wrong password.
+  if (!adminRow && !mailboxRow) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
   }
 
   return { error: 'Invalid username or password.' };

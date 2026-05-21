@@ -5,13 +5,13 @@ A modern, docker-first reimplementation of [phppostfixadmin](https://github.com/
 Router + React Server Components)**, **react-bootstrap 5**, and **Drizzle ORM** on MySQL.
 
 If you've ever wrestled with `config.inc.php`, Apache aliases, and PHP paths just to get a mail
-admin panel running, this is for you. The whole thing is configured via environment variables and
-ships in a single container.
+admin panel running - or just wanted a slightly more modern UI, this is for you. The whole thing is 
+configured via environment variables and ships in a single container.
 
 ## Highlights
 
 - **Drop-in database compatibility** — the Drizzle schema mirrors phppostfixadmin's exact table
-  and column names. You can point this at an existing postfixadmin DB and it just works.
+  and column names. You can point this at an existing postfixadmin DB and it just works if migrating.
 - **Dovecot-compatible password column** — stored as `{SCHEME}hash`. New hashes default to
   `{BLF-CRYPT}` (bcrypt, which Dovecot verifies natively). Legacy `{SHA512-CRYPT}` **and
   `{MD5-CRYPT}` / `$1$`** hashes (the latter being what phppostfixadmin writes in `md5crypt`
@@ -224,6 +224,29 @@ the same database. The password column uses the `{SCHEME}hash` format Dovecot ex
 
 See the upstream phppostfixadmin docs for the canonical Postfix & Dovecot query files — every
 column and table they reference exists here with the same name.
+
+## Security
+
+The app authorizes every mutation (role- and domain-scoped), stores only `{BLF-CRYPT}`
+passwords, signs sessions (JWT, `httpOnly`, re-checked against the DB each request so
+deactivation/demotion is immediate), audits every write, ships hardening headers
+(CSP, `X-Frame-Options`, HSTS, …), and requires `SESSION_SECRET` to be ≥32 chars. A few
+operational responsibilities are **yours**, though:
+
+- **No built-in login rate-limiting.** The web login isn't throttled. **Do not expose the admin
+  UI directly to the internet** without putting it behind a rate-limiting reverse proxy
+  (nginx `limit_req`, Caddy, Cloudflare, …) and/or restricting access to a trusted network
+  (VPN/WireGuard/Tailscale). Brute-force protection for the *mail* protocols (SMTP/IMAP/POP3) is a
+  separate concern — use fail2ban on the mail server.
+- **Keep the session cookie `Secure`.** `SESSION_COOKIE_SECURE` defaults to on in production.
+  Only set it `false` when the app is reached over an already-encrypted transport (a VPN like
+  Tailscale, or behind a TLS-terminating proxy). Over plain HTTP on an untrusted network the
+  session cookie can be sniffed.
+- **The CLI is a privileged tool.** `cli` / `pfd-cli` (and `scripts/cli.ts`) talk straight to the
+  database and **bypass the web RBAC entirely** — exactly like phppostfixadmin's
+  `postfixadmin-cli`. Anyone who can `docker exec` into the container, or run it with the DB
+  credentials, has full control over every domain and mailbox. Treat container-exec / DB access as
+  equivalent to superadmin and restrict it accordingly.
 
 ## What's deliberately missing
 

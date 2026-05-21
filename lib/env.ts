@@ -17,6 +17,17 @@ function required(name: string, fallback?: string): string {
   return value;
 }
 
+function requiredMinLen(name: string, minLen: number): string {
+  const value = required(name);
+  if (value.length < minLen) {
+    throw new Error(
+      `${name} must be at least ${minLen} characters (got ${value.length}). ` +
+        `Generate one with: openssl rand -base64 48`,
+    );
+  }
+  return value;
+}
+
 function optional(name: string, fallback: string): string {
   const value = process.env[name];
   return value === undefined || value === '' ? fallback : value;
@@ -52,7 +63,7 @@ export const env = {
   databaseUrl: databaseUrl(),
 
   session: {
-    secret: required('SESSION_SECRET'),
+    secret: requiredMinLen('SESSION_SECRET', 32),
     cookieName: optional('SESSION_COOKIE_NAME', 'postfix_dashboard_session'),
     maxAgeSec: int('SESSION_MAX_AGE', 60 * 60 * 8),
     // Defaults to true in production, false otherwise. Override when running
