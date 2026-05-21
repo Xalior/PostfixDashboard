@@ -8,11 +8,11 @@ import {
   hashWithScheme,
 } from './crypt';
 
-// Deterministic vectors generated with `openssl passwd -1` / `-6`.
+// Deterministic vectors generated with `openssl passwd -1` / `-6`. The `$1$`
+// vectors are byte-identical in format to what phppostfixadmin (md5crypt /
+// php_crypt:MD5) writes, so they exercise the real legacy-hash path.
 const MD5 = '$1$Xx01abcd$9K62HTSO6Ulgfzh4ThOm/1'; // "correct horse"
 const MD5_2 = '$1$deadbeef$PdTh9ZGnjSIUKQ6sv1jCz.'; // "s3cr3t-pass"
-// A real hash written by phppostfixadmin 4.0.1 (php_crypt:MD5) on nancy.
-const MD5_LIVE = '$1$REDACTED'; // "REDACTED"
 const SHA512 =
   '$6$0123456789abcdef$lDHzA5IdO41viXIs6llkDKq4Uh2VG9JXIYJ.taq2zlNFqBnKQ0/fOUW0Zoz49ZnOpe2ACY.PoF6wosL.jL3Af0'; // "correct horse"
 
@@ -24,11 +24,6 @@ test('verifyMd5Crypt: correct password returns true', () => {
 test('verifyMd5Crypt: wrong password returns false', () => {
   assert.equal(verifyMd5Crypt('wrong horse', MD5), false);
   assert.equal(verifyMd5Crypt('', MD5), false);
-});
-
-test('verifyMd5Crypt: verifies a real phppostfixadmin-written hash', () => {
-  assert.equal(verifyMd5Crypt('REDACTED', MD5_LIVE), true);
-  assert.equal(verifyMd5Crypt('nope', MD5_LIVE), false);
 });
 
 test('verifyPassword: prefix-less $1$ md5crypt (CRYPT auto-detect path)', async () => {

@@ -9,8 +9,8 @@ test('default is relative domain/localpart/ (matches phppostfixadmin)', () => {
 
 test('default template is relative (no leading slash, bare localpart)', () => {
   assert.equal(DEFAULT_MAILDIR_TEMPLATE, '{domain}/{local}/');
-  const md = buildMaildir('alice', 'nancy.xalior.com');
-  assert.equal(md, 'nancy.xalior.com/alice/');
+  const md = buildMaildir('alice', 'example.com');
+  assert.equal(md, 'example.com/alice/');
   assert.equal(md.startsWith('/'), false);
   assert.equal(md.includes('@'), false);
 });
