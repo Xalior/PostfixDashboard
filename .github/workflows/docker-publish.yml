@@ -1,9 +1,10 @@
 name: Publish container image (GHCR)
 
-# Builds the multi-arch runner image (app + embedded `pfd-cli`/`cli`) and pushes
-# it to GitHub Container Registry. Image name follows the repo:
-#   ghcr.io/<owner>/<repo>   (lowercased)
-# Pull on the host with e.g.  ghcr.io/<owner>/<repo>:main  or  :latest (on tags).
+# Builds the multi-arch runner image (app + embedded `pfd-cli`/`cli`) on NATIVE
+# runners — amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm (free for public
+# repos) — so neither arch is emulated under QEMU. Each arch is pushed by digest,
+# then a merge job assembles a single multi-arch manifest. Pull with e.g.
+#   ghcr.io/xalior/postfixdashboard:main   or   :latest (on tags)
 
 on:
   push:
@@ -12,23 +13,32 @@ on:
     paths-ignore: ['**.md', '.env.example', 'docs/**']
   workflow_dispatch:
 
-# A newer push supersedes an in-flight build (the emulated arm64 leg is slow).
 concurrency:
   group: ghcr-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
+  # GHCR requires a lowercase path; hardcode the lowercased <owner>/<repo>.
+  IMAGE: xalior/postfixdashboard
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  build:
+    name: build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -37,11 +47,64 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata (tags + labels)
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${digest#sha256:}"
+        env:
+          digest: ${{ steps.build.outputs.digest }}
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata (tags)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -49,20 +112,12 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Create + push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push (runner target, amd64 + arm64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: runner
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Inspect
+        run: docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
